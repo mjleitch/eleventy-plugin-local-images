@@ -4,6 +4,7 @@ const { JSDOM } = require('jsdom');
 const fetch = require('node-fetch');
 const sh = require('shorthash');
 const fileType = require('file-type');
+const srcset = require('srcset');
 
 let config = { distPath: '_site', verbose: false, attribute: 'src' };
 
@@ -41,49 +42,118 @@ const getFileType = (filename, buffer) => {
 
 const urlJoin = (a, b) => `${a.replace(/\/$/, '')}/${b.replace(/^\//, '')}`;
 
-const processImage = async img => {
-  let { distPath, assetPath, attribute } = config;
-
+const processSrc = async (src, opts) => {
+  const {
+    distPath,
+    assetPath,
+    verbose
+  } = opts;
   const external = /https?:\/\/((?:[\w\d-]+\.)+[\w\d]{2,})/i;
-  const imgPath = img.getAttribute(attribute);
 
-  if (external.test(imgPath)) {
+  if (external.test(src)) {
     try {
       // get the filname from the path
-      const pathComponents = imgPath.split('/');
-      
+      const pathComponents = src.split('/');
+
       // break off cache busting string if there is one
       let filename = pathComponents[pathComponents.length - 1].split("?");
       filename = filename[0];
-      
+
       // generate a unique short hash based on the original file path
       // this will prevent filename clashes
-      const hash = sh.unique(imgPath);
+      const hash = sh.unique(src);
 
       // image is external so download it.
-
-      let imgBuffer = await downloadImage(imgPath);
+      let imgBuffer = await downloadImage(src);
       if (imgBuffer) {
-        
+
         // check if the remote image has a file extension and then hash the filename
         const hashedFilename = !path.extname(filename) ? `${hash}-${getFileType(filename, imgBuffer)}` : `${hash}-${filename}`;
 
         // create the file path from config
-        let outputFilePath = path.join(distPath,assetPath, hashedFilename);
+        let outputFilePath = path.join(distPath, assetPath, hashedFilename);
 
         // save the file out, and log it to the console
         await fs.outputFile(outputFilePath, imgBuffer);
-        if (config.verbose) {
+        if (verbose) {
           console.log(`eleventy-plugin-local-images: Saving ${filename} to ${outputFilePath}`);
         }
 
-        // Update the image with the new file path
-        img.setAttribute(attribute, urlJoin(assetPath, hashedFilename));
+        return urlJoin(assetPath, hashedFilename)
       }
+
+      return src
+
     } catch (error) {
       console.log(error);
+
+      return src;
     }
-  }
+
+  } 
+  
+  return src;
+}
+
+const processImage = async img => {
+  let { distPath, assetPath, attribute } = config;
+  
+  img.setAttribute(attribute, await processSrc(img.getAttribute(attribute), config));
+
+  await Promise.resolve(img.getAttribute('data-srcset'))
+    .then(srcset.parse)
+    .catch(err => ([]))
+    .then(dataSrcset => dataSrcset.reduce(async (prevResults, src) => {
+      return [
+        ...await prevResults,
+        {
+          ...src,
+          url: await processSrc(src.url, config),
+        }
+      ]
+    }, Promise.resolve([])))
+    .then()
+    .then(srcset.stringify)
+    .then(dataSrcset => img.setAttribute('data-srcset', dataSrcset))
+    .catch(err => {console.log(err)});
+  
+
+  // if (external.test(imgPath)) {
+  //   try {
+  //     // get the filname from the path
+  //     const pathComponents = imgPath.split('/');
+      
+  //     // break off cache busting string if there is one
+  //     let filename = pathComponents[pathComponents.length - 1].split("?");
+  //     filename = filename[0];
+      
+  //     // generate a unique short hash based on the original file path
+  //     // this will prevent filename clashes
+  //     const hash = sh.unique(imgPath);
+
+  //     // image is external so download it.
+  //     let imgBuffer = await downloadImage(imgPath);
+  //     if (imgBuffer) {
+        
+  //       // check if the remote image has a file extension and then hash the filename
+  //       const hashedFilename = !path.extname(filename) ? `${hash}-${getFileType(filename, imgBuffer)}` : `${hash}-${filename}`;
+
+  //       // create the file path from config
+  //       let outputFilePath = path.join(distPath,assetPath, hashedFilename);
+
+  //       // save the file out, and log it to the console
+  //       await fs.outputFile(outputFilePath, imgBuffer);
+  //       if (config.verbose) {
+  //         console.log(`eleventy-plugin-local-images: Saving ${filename} to ${outputFilePath}`);
+  //       }
+
+  //       // Update the image with the new file path
+  //       img.setAttribute(attribute, urlJoin(assetPath, hashedFilename));
+  //     }
+  //   } catch (error) {
+  //     console.log(error);
+  //   }
+  // }
 
   return img;
 };
